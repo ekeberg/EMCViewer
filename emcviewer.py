@@ -225,6 +225,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def update_file_list(self):
         new_file_list = [f for f in os.listdir(self._data_dir)
                          if re.search(self._file_filter, f)]
+        new_file_list.sort()
         if len(new_file_list) == 0:
             raise ValueError(f"Directory {self._data_dir} does not contain any files matching {self._file_filter}")
 
