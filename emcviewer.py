@@ -12,7 +12,7 @@ from eke import sphelper
 
 class SliceWidget(QtWidgets.QFrame):
     def __init__(self, parent=None):
-        super().__init__()
+        super().__init__(parent)
         self._data = None
         self._cmap_dict = {"log": False,
                            "vmin": 0,
@@ -35,8 +35,7 @@ class SliceWidget(QtWidgets.QFrame):
 
         self.setLayout(layout)
         
-        self._vtk_window.Render()
-
+        self._vtk_window.Render()        
 
     def set_data(self, data):
         if self._data is None or self._data.shape != data.shape:
@@ -63,7 +62,6 @@ class SliceWidget(QtWidgets.QFrame):
         
         self._picker = vtk.vtkCellPicker()
         self._picker.SetTolerance(0.005)
-
 
         self._plane = vtk.vtkImagePlaneWidget()
         self._plane.SetInputData(self._image_data)
@@ -126,30 +124,43 @@ class SliceWidget(QtWidgets.QFrame):
 
 
 class MainWindow(QtWidgets.QMainWindow):
-    def __init__(self, data_dir):
+    def __init__(self, data_dir, file_filter=None):
         super(MainWindow, self).__init__()
-        self._data_dir = data_dir
+        self._file_list = None
+        self._file_index = None
+        self._file_filter = file_filter if file_filter else "model.*.h5$"
 
-        self.update_file_list()
-        self._file_index = len(self.file_list) - 1
+        self._setup_gui()
+        self._setup_shortcuts()
 
-        self._slice_widget = SliceWidget()
+        if os.path.isdir(data_dir):
+            self._data_dir = data_dir
+            self.update_file_list()
+            self.load_file(len(self._file_list)-1)
+        elif os.path.isfile(data_dir):
+            self._data_dir, this_file = os.path.split(data_dir)
+            self.update_file_list()
+            self.load_file(self._file_list.index(this_file))
+        else:
+            raise ValueError(f"Can not load, {data_dir} is not a directory or file")
+
+        self._file_list_timer = QtCore.QTimer()
+        self._file_list_timer.timeout.connect(self.update_file_list)
+        self._file_list_timer.start(1000)
         
+    def _setup_gui(self):
+        self._slice_widget = SliceWidget()
+
         self._prev_button = QtWidgets.QPushButton("Previous")
-        self._prev_button.clicked.connect(self._on_model_prev)
         self._next_button = QtWidgets.QPushButton("Next")
+        self._prev_button.clicked.connect(self._on_model_prev)
         self._next_button.clicked.connect(self._on_model_next)
 
-        self._filename_label = QtWidgets.QLabel("")
         self._filename_combobox = QtWidgets.QComboBox(self)
-        for f in self.file_list:
-            self._filename_combobox.addItem(os.path.split(f)[1])
-        self._filename_combobox.setCurrentIndex(self._file_index)
         self._filename_combobox.activated[str].connect(self._on_combobox_change)
 
-        self._logscale_box = QtWidgets.QCheckBox("Log:")
-        def set_log(state): self._slice_widget.cmap_log = state
-        self._logscale_box.stateChanged.connect(set_log)
+        self._logscale_box = QtWidgets.QCheckBox("Logscale")
+        self._logscale_box.stateChanged.connect(self._on_log_scale)
 
         float_validator = QtGui.QDoubleValidator()
         self._cmap_min_edit = QtWidgets.QLineEdit("0.0")
@@ -161,32 +172,33 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_cmap_button = QtWidgets.QPushButton("Update cmap")
         self._update_cmap_button.clicked.connect(self._on_cmap_auto)
 
-        layout_2 = QtWidgets.QHBoxLayout()
-        layout_2.addWidget(self._prev_button)
-        layout_2.addWidget(self._filename_combobox)
-        layout_2.addWidget(self._next_button)
+        layout = QtWidgets.QGridLayout()
 
-        layout_3 = QtWidgets.QHBoxLayout()
-        layout_3.addWidget(self._logscale_box)
-        layout_3.addWidget(self._cmap_min_edit)
-        layout_3.addWidget(self._update_cmap_button)
-        layout_3.addWidget(self._cmap_max_edit)
-        
-        layout_1 = QtWidgets.QVBoxLayout()
-        layout_1.addWidget(self._slice_widget)
-        layout_1.addLayout(layout_2)
-        layout_1.addLayout(layout_3)
+        layout.addWidget(self._slice_widget, 0, 0, 1, 3)
+        layout.addWidget(self._prev_button, 1, 0)
+        layout.addWidget(self._filename_combobox, 1, 1)
+        layout.addWidget(self._next_button, 1, 2)
+
+        layout.addWidget(self._cmap_min_edit, 2, 0)
+        layout.addWidget(self._update_cmap_button, 2, 1)
+        layout.addWidget(self._cmap_max_edit, 2, 2)
+
+        layout.addWidget(self._logscale_box, 3, 0)
         
         central_widget = QtWidgets.QWidget()
-        central_widget.setLayout(layout_1)
+        central_widget.setLayout(layout)
 
         self.setCentralWidget(central_widget)
 
-        self.load_file(self.file_list[self._file_index])
-
+    def _setup_shortcuts(self):
+        self._next_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("right"), self._next_button)
+        self._next_shortcut.activated.connect(self._on_model_next)
+        self._prev_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("left"), self._prev_button)
+        self._prev_shortcut.activated.connect(self._on_model_prev)
+        
     def _on_combobox_change(self, text):
-        self._file_index = self.file_list.index(text)
-        self.load_file(text)
+        # self._file_index = self._file_list.index(text)
+        self.load_file(self._file_list.index(text))
 
     def _on_vmin_change(self, vmin):
         try:
@@ -195,6 +207,9 @@ class MainWindow(QtWidgets.QMainWindow):
             return 
         self._slice_widget.cmap_vmin = vmin
 
+    def _on_log_scale(self, state):
+        self._slice_widget.cmap_log = state
+        
     def _on_vmax_change(self, vmax):
         try:
             vmax = float(vmax)
@@ -206,38 +221,54 @@ class MainWindow(QtWidgets.QMainWindow):
         self._slice_widget.cmap_auto()
         self._cmap_min_edit.setText(str(self._slice_widget.cmap_vmin))
         self._cmap_max_edit.setText(str(self._slice_widget.cmap_vmax))
-        
-    def update_file_list(self):
-        self.file_list = [f for f in os.listdir(self._data_dir)
-                          if re.search("model.+h5$", f)]
 
-    def load_file(self, file_name):
-        data = sphelper.import_spimage(os.path.join(self._data_dir, file_name), ["image"])
+    def update_file_list(self):
+        new_file_list = [f for f in os.listdir(self._data_dir)
+                         if re.search(self._file_filter, f)]
+
+        if self._file_list is not None:
+            current_file_name = self._file_list[self._file_index]
+            if self._file_list  == new_file_list:
+                return
+        else:
+            current_file_name = new_file_list[-1]
+
+        self._file_list = new_file_list
+        if current_file_name in self._file_list:
+            self._file_index = self._file_list.index(current_file_name)
+        else:
+            self._file_index = len(self._file_list) - 1
+
+        self._filename_combobox.clear()
+        for f in self._file_list:
+            self._filename_combobox.addItem(os.path.split(f)[1])
+        self._filename_combobox.setCurrentIndex(self._file_index)
+
+    def load_file(self, file_index):
+        self._file_index = file_index
+        self._filename_combobox.setCurrentIndex(self._file_index)
+        data = sphelper.import_spimage(os.path.join(self._data_dir, self._file_list[self._file_index]), ["image"])
         self._slice_widget.set_data(data)
-        self._filename_label.setText(file_name)
-        
+
     def _on_model_next(self):
-        if self._file_index + 1 < len(self.file_list):
-            self._file_index += 1
-            self._filename_combobox.setCurrentIndex(self._file_index)
-            self.load_file(self.file_list[self._file_index])
+        if self._file_index + 1 < len(self._file_list):
+            self.load_file(self._file_index + 1)
 
     def _on_model_prev(self):
         if self._file_index - 1 >= 0:
-            self._file_index -= 1
-            self._filename_combobox.setCurrentIndex(self._file_index)
-            self.load_file(self.file_list[self._file_index])
+            self.load_file(self._file_index - 1)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("data_dir", type=str)
+    parser.add_argument("--filter", type=str, default=None)
     args = parser.parse_args()
 
     app = QtWidgets.QApplication([f"EMCviewer"])
     app.setApplicationName("EMCviewer")
 
-    program = MainWindow(args.data_dir)
+    program = MainWindow(args.data_dir, file_filter=args.filter)
     program.resize(1024, 1024)
     program.show()
     program.activateWindow()
