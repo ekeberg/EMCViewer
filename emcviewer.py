@@ -264,7 +264,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("data_dir", type=str)
+    parser.add_argument("data_dir", type=str, nargs="?", default=".")
     parser.add_argument("--filter", type=str, default=None)
     args = parser.parse_args()
 
