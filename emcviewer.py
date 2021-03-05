@@ -131,6 +131,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._file_filter = file_filter if file_filter else "model.*.h5$"
 
         self._setup_gui()
+        self._setup_menu()
         self._setup_shortcuts()
 
         if os.path.isdir(data_dir):
@@ -189,7 +190,7 @@ class MainWindow(QtWidgets.QMainWindow):
         central_widget.setLayout(layout)
 
         self.setCentralWidget(central_widget)
-
+        
     def _setup_shortcuts(self):
         self._next_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("right"), self._next_button)
         self._next_shortcut.activated.connect(self._on_model_next)
@@ -222,6 +223,29 @@ class MainWindow(QtWidgets.QMainWindow):
         self._cmap_min_edit.setText(str(self._slice_widget.cmap_vmin))
         self._cmap_max_edit.setText(str(self._slice_widget.cmap_vmax))
 
+    def _setup_menu(self):
+        # menubar = QtWidgets.QMenuBar()
+        menubar = self.menuBar()
+        file_menu = menubar.addMenu("File")
+        open_action = QtWidgets.QAction("&Open", self)
+        open_action.setShortcut("Ctrl+O")
+        open_action.triggered.connect(self._on_open_dir)
+        file_menu.addAction(open_action)
+        quit_action = QtWidgets.QAction("&Quit", self)
+        quit_action.setShortcut("Ctrl+Q")
+        quit_action.triggered.connect(QtWidgets.qApp.quit)
+        file_menu.addAction(quit_action)
+
+    def _on_open_dir(self):
+        new_dir = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Folder")
+        if new_dir:
+            self.change_data_dir(new_dir)
+            
+    def change_data_dir(self, new_dir):
+        self._data_dir = new_dir
+        self.update_file_list()
+        self.load_file(len(self._file_list)-1)
+        
     def update_file_list(self):
         new_file_list = [f for f in os.listdir(self._data_dir)
                          if re.search(self._file_filter, f)]
