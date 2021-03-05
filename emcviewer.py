@@ -52,6 +52,8 @@ class SliceWidget(QtWidgets.QFrame):
             camera = self._renderer.GetActiveCamera()
             camera.SetFocalPoint(*(s/2 for s in self._data.shape))
             camera.SetPosition(self._data.shape[0]/2, self._data.shape[1]/2, self._data.shape[2]*2)
+            camera.SetViewUp(1., 0., 0.)
+            camera.SetClippingRange(0.01, 1000000000)
         else:
             self._data[:] = data
             self._float_array.Modified()
@@ -122,6 +124,24 @@ class SliceWidget(QtWidgets.QFrame):
         self._cmap_dict["vmax"] = self._data.max()
         self.refresh_lut()
 
+    def reset_camera(self):
+        camera = self._renderer.GetActiveCamera()
+        camera.SetFocalPoint(*(s/2 for s in self._data.shape))
+        camera.SetPosition(self._data.shape[0]/2, self._data.shape[1]/2, self._data.shape[2]*2*2)
+        camera.SetClippingRange(0.01, 1000000000)
+        camera.SetViewUp(1., 0., 0.)
+        camera.Modified()
+        self._vtk_window.Modified()
+        self._vtk_window.Render()
+        self._vtk_widget.Render()
+        
+
+    def reset_plane(self):
+        self._plane.SetPlaneOrientationToZAxes()
+        self._plane.SetSliceIndex(self._data.shape[2]//2)
+        self._plane.Modified()
+        self._vtk_window.Render()
+
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, data_dir, file_filter=None):
@@ -163,6 +183,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._logscale_box = QtWidgets.QCheckBox("Logscale")
         self._logscale_box.stateChanged.connect(self._on_log_scale)
 
+        self._reset_camera_button = QtWidgets.QPushButton("Reset camera")
+        self._reset_camera_button.clicked.connect(self._slice_widget.reset_camera)
+
+        self._reset_plane_button = QtWidgets.QPushButton("Reset plane")
+        self._reset_plane_button.clicked.connect(self._slice_widget.reset_plane)
+
         float_validator = QtGui.QDoubleValidator()
         self._cmap_min_edit = QtWidgets.QLineEdit("0.0")
         self._cmap_min_edit.setValidator(float_validator)
@@ -185,6 +211,8 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(self._cmap_max_edit, 2, 2)
 
         layout.addWidget(self._logscale_box, 3, 0)
+        layout.addWidget(self._reset_plane_button, 3, 1)
+        layout.addWidget(self._reset_camera_button, 3, 2)
         
         central_widget = QtWidgets.QWidget()
         central_widget.setLayout(layout)
@@ -284,7 +312,6 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_model_prev(self):
         if self._file_index - 1 >= 0:
             self.load_file(self._file_index - 1)
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
