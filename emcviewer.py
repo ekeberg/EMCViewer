@@ -9,6 +9,12 @@ import sys
 from eke import vtk_tools
 from eke import sphelper
 
+import time
+import pathlib
+
+def mtime(filename):
+    return pathlib.Path(filename).stat().st_mtime
+
 
 class PlaneTool:
     def __init__(self, vtk_widget, image_data):
@@ -267,34 +273,188 @@ class View3DWidget(QtWidgets.QFrame):
         self._vtk_window.Modified()
         self._vtk_window.Render()
         self._vtk_widget.Render()
+
+
+class FileCaching(QtCore.QThread):
+    def __init__(self, data_dir, file_filter, cache_limit=100):
+        super().__init__()
+        self.index = []
+        self.data = []
+        self.mtime = []
+
+        self._cache_limit = cache_limit
+
+        self._running = True
+        self._paused = False
+        self.file_list = None
+        
+        self._data_dir = data_dir
+        self._file_filter = file_filter
+        self.current_index = 10
+        self.update_file_list()
+
+    def change_data_dir(self, new_dir):
+        print("Change data dir")
+        self._data_dir = new_dir
+        # Reset the cache. Later could possibly be saved as an alternate cache, if we do a lot of switching.
+        self.index = []
+        self.data = []
+        self.mtime = []
+        self.update_file_list()
+
+        filename = os.path.join(self._data_dir, self.file_list[self.current_index])
+        data = sphelper.import_spimage(filename, ["image"])
+        self.index.append(self.current_index)
+        self.data.append(data)
+        self.mtime.append(mtime(filename))
+
+        print(f"Cache is now of size {len(self.index)}")
+        
+    def update_file_list(self):
+        new_file_list = [f for f in os.listdir(self._data_dir)
+                         if re.search(self._file_filter, f)]
+        new_file_list.sort()
+        if len(new_file_list) == 0:
+            raise ValueError(f"Directory {self._data_dir} does not contain any files matching {self._file_filter}")
+
+        if self.file_list is not None:
+            current_file_name = self.file_list[self.current_index]
+            if self.file_list  == new_file_list:
+                return
+        else:
+            current_file_name = new_file_list[-1]
+
+        self.file_list = new_file_list
+        if current_file_name in self.file_list:
+            self.current_index = self.file_list.index(current_file_name)
+        else:
+            self.current_index = len(self.file_list) - 1
+
+    def run(self):
+        print("Start file cacher")
+        while self._running:
+            print("Cache loop is running!")
+            if self._paused:
+                print("Sleeping: paused")
+                time.sleep(0.5)
+                continue
+
+            # Remove outdated files
+            original_length = len(self.index)
+            for file_index in original_length:
+                # Go backwards to avoid index shifting
+                inv_index = original_length - file_index - 1
+                if self.mtime[inv_index] != mtime(self.file_list[self.index[inv_index]]):
+                    del self.index[inv_index]
+                    del self.data[inv_index]
+                    del self.mtime[inv_index]
+
+            
+            load_index = self.current_index + 1
+            self.update_file_list()
+            # Do some check of if the current index changed (or put in update_file_list
+
+            if len(self.index) >= len(self.file_list):
+                print(f"{len(self.index)} files cached, {len(self.file_list)} in list")
+                print("Sleeping: Don't load, all files are cached")
+                time.sleep(0.5)
+                continue
+
+            while load_index in self.index or load_index < 0 or load_index >= len(self.file_list):
+                load_index = 2*self.current_index - load_index + (1 if load_index < self.current_index else 0)
+                if abs(load_index - self.current_index) > self._cache_limit:
+                    print("Stuck in inner loop")
+                    break
+
+            if load_index < 0 or load_index >= len(self.file_list):
+                continue
+
+            while len(self.index) > self._cache_limit:
+                distance = [abs(i - self.current_index) for i in  self.index]
+                max_distance = max(distance)
+                index_to_del = distance.index(max_distance)
+                print(f"Remove {self.index[index_to_del]} because cache is overfull")
+                del self.index[index_to_del]
+                del self.data[index_to_del]
+                del self.mtime[index_to_del]
+
+            if len(self.index) == self._cache_limit:
+                distance = [abs(i - self.current_index) for i in  self.index]
+                max_distance = max(distance)
+                if abs(load_index-self.current_index) >= max_distance:
+                    print("Sleeping: Cache is full")
+                    time.sleep(0.5)
+                    continue
+                index_to_del = distance.index(max_distance)
+                print(f"Remove {self.index[index_to_del]} to make room for {load_index}")
+                del self.index[index_to_del]
+                del self.data[index_to_del]
+                del self.mtime[index_to_del]
+
+            print(f"Cache data {load_index}")
+            filename = os.path.join(self._data_dir, self.file_list[load_index])
+            data = sphelper.import_spimage(filename, ["image"])
+            self.index.append(load_index)
+            self.data.append(data)
+            self.mtime.append(mtime(filename))
+        
+    def get_data(self, index):
+        self.current_index = index
+        if index in self.index:
+            print(f"Load {index} cached")
+            return self.data[self.index.index(index)]
+        else:
+            print(f"Load {index} from file")
+            print(f"Currently cached: {self.index}")
+            filename = os.path.join(self._data_dir, self.file_list[index])
+            data = sphelper.import_spimage(filename, ["image"])
+            self.index.append(index)
+            self.data.append(data)
+            self.mtime.append(mtime(filename))
+            return data
+
+    def pause(self):
+        self._paused = True
+
+    def unpause(self):
+        self._paused = False
+        
+    def exit(self):
+        print("exit cacher")
+        self._running = False
+        super().exit()
+        print("finished exit cacher")
         
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, data_dir, file_filter=None):
         super(MainWindow, self).__init__()
-        self._file_list = None
-        self._file_index = None
-        self._file_filter = file_filter if file_filter else "model.*.h5$"
 
+        self._file_cacher = FileCaching(data_dir, file_filter if file_filter else "model.*.h5$", 100)
+        self._file_cacher.start()
+        
         self._setup_gui()
         self._setup_menu()
         self._setup_shortcuts()
 
         if os.path.isdir(data_dir):
             self._data_dir = data_dir
-            self.update_file_list()
-            self.load_file(len(self._file_list)-1)
+            self._file_cacher.update_file_list()
+            self._update_file_combobox()
+            self.load_file(len(self._file_cacher.file_list)-1)
         elif os.path.isfile(data_dir):
             self._data_dir, this_file = os.path.split(data_dir)
-            self.update_file_list()
-            self.load_file(self._file_list.index(this_file))
+            self._file_cacher.update_file_list()
+            self._update_file_combobox()
+            self.load_file(self._file_cacher.file_list.index(this_file))
         else:
             raise ValueError(f"Can not load, {data_dir} is not a directory or file")
 
         self._file_list_timer = QtCore.QTimer()
-        self._file_list_timer.timeout.connect(self.update_file_list)
+        self._file_list_timer.timeout.connect(self._on_timer)
         self._file_list_timer.start(1000)
-        
+
+
     def _setup_gui(self):
         self._view3d_widget = View3DWidget()
 
@@ -351,10 +511,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self._next_shortcut.activated.connect(self._on_model_next)
         self._prev_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("left"), self._prev_button)
         self._prev_shortcut.activated.connect(self._on_model_prev)
+
+    def _on_timer(self):
+        self._file_cacher.update_file_list()
+        self._update_file_combobox()
         
     def _on_combobox_change(self, text):
         # self._file_index = self._file_list.index(text)
-        self.load_file(self._file_list.index(text))
+        # self.load_file(self._file_list.index(text))
+        self.load_file(self._filename_combobox.currentIndex())
 
     def _setup_menu(self):
         # menubar = QtWidgets.QMenuBar()
@@ -366,57 +531,42 @@ class MainWindow(QtWidgets.QMainWindow):
         file_menu.addAction(open_action)
         quit_action = QtWidgets.QAction("&Quit", self)
         quit_action.setShortcut("Ctrl+Q")
-        quit_action.triggered.connect(QtWidgets.qApp.quit)
+        quit_action.triggered.connect(self._on_quit)
         file_menu.addAction(quit_action)
 
+    def _on_quit(self):
+        print("Quit gracefully")
+        self._file_cacher.exit()
+        print("exit app")
+        QtWidgets.qApp.quit()
+        print("finished exit app")
+        
     def _on_open_dir(self):
+        self._file_cacher.pause()
         new_dir = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Folder")
         if new_dir:
-            self.change_data_dir(new_dir)
-            
-    def change_data_dir(self, new_dir):
-        self._data_dir = new_dir
-        self.update_file_list()
-        self.load_file(len(self._file_list)-1)
-        
-    def update_file_list(self):
-        new_file_list = [f for f in os.listdir(self._data_dir)
-                         if re.search(self._file_filter, f)]
-        new_file_list.sort()
-        if len(new_file_list) == 0:
-            raise ValueError(f"Directory {self._data_dir} does not contain any files matching {self._file_filter}")
+            self._file_cacher.change_data_dir(new_dir)
+        self._file_cacher.unpause()
 
-        if self._file_list is not None:
-            current_file_name = self._file_list[self._file_index]
-            if self._file_list  == new_file_list:
-                return
-        else:
-            current_file_name = new_file_list[-1]
-
-        self._file_list = new_file_list
-        if current_file_name in self._file_list:
-            self._file_index = self._file_list.index(current_file_name)
-        else:
-            self._file_index = len(self._file_list) - 1
-
+    def _update_file_combobox(self):
         self._filename_combobox.clear()
-        for f in self._file_list:
+        for f in self._file_cacher.file_list:
             self._filename_combobox.addItem(os.path.split(f)[1])
-        self._filename_combobox.setCurrentIndex(self._file_index)
+        self._filename_combobox.setCurrentIndex(self._file_cacher.current_index)
 
     def load_file(self, file_index):
-        self._file_index = file_index
-        self._filename_combobox.setCurrentIndex(self._file_index)
-        data = sphelper.import_spimage(os.path.join(self._data_dir, self._file_list[self._file_index]), ["image"])
+        self._filename_combobox.setCurrentIndex(file_index)
+        # data = sphelper.import_spimage(os.path.join(self._data_dir, self._file_list[self._file_index]), ["image"])
+        data = self._file_cacher.get_data(file_index)
         self._view3d_widget.set_data(data)
 
     def _on_model_next(self):
-        if self._file_index + 1 < len(self._file_list):
-            self.load_file(self._file_index + 1)
+        if self._file_cacher.current_index + 1 < len(self._file_cacher.file_list):
+            self.load_file(self._file_cacher.current_index + 1)
 
     def _on_model_prev(self):
-        if self._file_index - 1 >= 0:
-            self.load_file(self._file_index - 1)
+        if self._file_cacher.current_index - 1 >= 0:
+            self.load_file(self._file_cacher.current_index - 1)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -433,3 +583,10 @@ if __name__ == "__main__":
     program.activateWindow()
     program.raise_()
     sys.exit(app.exec_())
+
+
+
+# TODO:
+# * Reset file list when changing dictionary
+# Check age of file when caching
+# * Pause caching when opening file dialog (this might be what is slowing it down.
