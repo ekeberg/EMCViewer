@@ -233,6 +233,8 @@ class View3DWidget(QtWidgets.QFrame):
         self.setLayout(layout)
 
         self._image_data = vtk.vtkImageData()
+        self._data = numpy.ascontiguousarray(numpy.zeros((5, 5, 5), dtype="float32"))
+        self._setup_float_array(self._data)
         
         self.plane_tool = PlaneTool(self._vtk_widget, self._image_data)
         self.isosurface_tool = IsosurfaceTool(self._vtk_widget, self._image_data)
@@ -240,15 +242,25 @@ class View3DWidget(QtWidgets.QFrame):
         
         self._vtk_window.Render()        
 
+    def _setup_float_array(self, data):
+        self._float_array = vtk.vtkFloatArray()
+        self._float_array.SetNumberOfComponents(1)
+        self._float_array.SetVoidArray(data, int(numpy.product(self._data.shape)), 1)
+        self._image_data.SetDimensions(*data.shape)
+        self._image_data.GetPointData().SetScalars(self._float_array)
+        
+        
     def set_data(self, data):
         if self._data is None or self._data.shape != data.shape:
             self._data = numpy.ascontiguousarray(data, dtype="float32")
-            self._float_array = vtk.vtkFloatArray()
-            self._float_array.SetNumberOfComponents(1)
-            self._float_array.SetVoidArray(self._data, int(numpy.product(self._data.shape)), 1)
+            self._setup_float_array(self._data)
+            # self._float_array = vtk.vtkFloatArray()
+            # self._float_array.SetNumberOfComponents(1)
+            # self._float_array.SetVoidArray(self._data, int(numpy.product(self._data.shape)), 1)
 
-            self._image_data.SetDimensions(*self._data.shape)
-            self._image_data.GetPointData().SetScalars(self._float_array)
+            # self._image_data.SetDimensions(*self._data.shape)
+            # self._image_data.GetPointData().SetScalars(self._float_array)
+
             # self.plane_tool.setup_plane()
             # self.plane_tool.set_data()
             self.plane_tool.reset_plane()
@@ -294,7 +306,7 @@ class FileCaching(QtCore.QThread):
         self.update_file_list()
 
     def change_data_dir(self, new_dir):
-        print("Change data dir")
+        # print("Change data dir")
         self._data_dir = new_dir
         # Reset the cache. Later could possibly be saved as an alternate cache, if we do a lot of switching.
         self.index = []
@@ -308,7 +320,7 @@ class FileCaching(QtCore.QThread):
         self.data.append(data)
         self.mtime.append(mtime(filename))
 
-        print(f"Cache is now of size {len(self.index)}")
+        # print(f"Cache is now of size {len(self.index)}")
         
     def update_file_list(self):
         new_file_list = [f for f in os.listdir(self._data_dir)
@@ -318,22 +330,37 @@ class FileCaching(QtCore.QThread):
             raise ValueError(f"Directory {self._data_dir} does not contain any files matching {self._file_filter}")
 
         if self.file_list is not None:
-            current_file_name = self.file_list[self.current_index]
-            if self.file_list  == new_file_list:
+            if self.file_list == new_file_list:
                 return
+            current_file_name = self.file_list[self.current_index]
         else:
             current_file_name = new_file_list[-1]
 
+        # Update index
+        original_length = len(self.index)
+        for i in range(len(self.index)):
+            inv_i = original_length - i - 1
+            fname = self.file_list[self.index[inv_i]]
+            if fname not in new_file_list:
+                del self.index[inv_i]
+                del self.data[inv_i]
+                del self.mtime[inv_i]
+            else:
+                self.index[inv_i] = new_file_list.index(fname)
+            
+            
         self.file_list = new_file_list
         if current_file_name in self.file_list:
             self.current_index = self.file_list.index(current_file_name)
         else:
             self.current_index = len(self.file_list) - 1
 
+        
+
     def run(self):
-        print("Start file cacher")
+        # print("Start file cacher")
         while self._running:
-            print("Cache loop is running!")
+            # print("Cache loop is running!")
             if self._paused:
                 print("Sleeping: paused")
                 time.sleep(0.5)
@@ -341,10 +368,10 @@ class FileCaching(QtCore.QThread):
 
             # Remove outdated files
             original_length = len(self.index)
-            for file_index in original_length:
+            for file_index in range(original_length):
                 # Go backwards to avoid index shifting
                 inv_index = original_length - file_index - 1
-                if self.mtime[inv_index] != mtime(self.file_list[self.index[inv_index]]):
+                if self.mtime[inv_index] != mtime(os.path.join(self._data_dir, self.file_list[self.index[inv_index]])):
                     del self.index[inv_index]
                     del self.data[inv_index]
                     del self.mtime[inv_index]
@@ -355,15 +382,15 @@ class FileCaching(QtCore.QThread):
             # Do some check of if the current index changed (or put in update_file_list
 
             if len(self.index) >= len(self.file_list):
-                print(f"{len(self.index)} files cached, {len(self.file_list)} in list")
-                print("Sleeping: Don't load, all files are cached")
+                # print(f"{len(self.index)} files cached, {len(self.file_list)} in list")
+                # print("Sleeping: Don't load, all files are cached")
                 time.sleep(0.5)
                 continue
 
             while load_index in self.index or load_index < 0 or load_index >= len(self.file_list):
                 load_index = 2*self.current_index - load_index + (1 if load_index < self.current_index else 0)
                 if abs(load_index - self.current_index) > self._cache_limit:
-                    print("Stuck in inner loop")
+                    # print("Stuck in inner loop")
                     break
 
             if load_index < 0 or load_index >= len(self.file_list):
@@ -373,7 +400,7 @@ class FileCaching(QtCore.QThread):
                 distance = [abs(i - self.current_index) for i in  self.index]
                 max_distance = max(distance)
                 index_to_del = distance.index(max_distance)
-                print(f"Remove {self.index[index_to_del]} because cache is overfull")
+                # print(f"Remove {self.index[index_to_del]} because cache is overfull")
                 del self.index[index_to_del]
                 del self.data[index_to_del]
                 del self.mtime[index_to_del]
@@ -382,16 +409,16 @@ class FileCaching(QtCore.QThread):
                 distance = [abs(i - self.current_index) for i in  self.index]
                 max_distance = max(distance)
                 if abs(load_index-self.current_index) >= max_distance:
-                    print("Sleeping: Cache is full")
+                    # print("Sleeping: Cache is full")
                     time.sleep(0.5)
                     continue
                 index_to_del = distance.index(max_distance)
-                print(f"Remove {self.index[index_to_del]} to make room for {load_index}")
+                # print(f"Remove {self.index[index_to_del]} to make room for {load_index}")
                 del self.index[index_to_del]
                 del self.data[index_to_del]
                 del self.mtime[index_to_del]
 
-            print(f"Cache data {load_index}")
+            # print(f"Cache data {load_index}")
             filename = os.path.join(self._data_dir, self.file_list[load_index])
             data = sphelper.import_spimage(filename, ["image"])
             self.index.append(load_index)
@@ -401,11 +428,11 @@ class FileCaching(QtCore.QThread):
     def get_data(self, index):
         self.current_index = index
         if index in self.index:
-            print(f"Load {index} cached")
+            # print(f"Load {index} cached")
             return self.data[self.index.index(index)]
         else:
-            print(f"Load {index} from file")
-            print(f"Currently cached: {self.index}")
+            # print(f"Load {index} from file")
+            # print(f"Currently cached: {self.index}")
             filename = os.path.join(self._data_dir, self.file_list[index])
             data = sphelper.import_spimage(filename, ["image"])
             self.index.append(index)
@@ -420,10 +447,10 @@ class FileCaching(QtCore.QThread):
         self._paused = False
         
     def exit(self):
-        print("exit cacher")
+        # print("exit cacher")
         self._running = False
         super().exit()
-        print("finished exit cacher")
+        # print("finished exit cacher")
         
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -441,12 +468,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self._data_dir = data_dir
             self._file_cacher.update_file_list()
             self._update_file_combobox()
-            self.load_file(len(self._file_cacher.file_list)-1)
+            self._load_file(len(self._file_cacher.file_list)-1)
         elif os.path.isfile(data_dir):
             self._data_dir, this_file = os.path.split(data_dir)
             self._file_cacher.update_file_list()
             self._update_file_combobox()
-            self.load_file(self._file_cacher.file_list.index(this_file))
+            self._load_file(self._file_cacher.file_list.index(this_file))
         else:
             raise ValueError(f"Can not load, {data_dir} is not a directory or file")
 
@@ -475,8 +502,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._plane_tool_checkbox = QtWidgets.QCheckBox("Plane")
         self._plane_tool_checkbox.stateChanged.connect(self._on_plane_visibility)
         self._plane_tool_checkbox.setChecked(True)
+
         self._isosurface_tool_checkbox = QtWidgets.QCheckBox("Isosurface")
-        self._isosurface_tool_checkbox.stateChanged.connect(self._on_isosurface_visibility)
+        self._isosurface_tool_checkbox.stateChanged.connect(self._on_isosurface_visibility)        
         self._isosurface_tool_checkbox.setChecked(False)
         
         layout = QtWidgets.QGridLayout()
@@ -492,6 +520,7 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(self._plane_tool_controls, 4, 0, 1, 3)
         layout.addWidget(self._isosurface_tool_checkbox, 5, 0)
         layout.addWidget(self._isosurface_tool_controls, 6, 0, 1, 3)
+        self._isosurface_tool_controls.setVisible(False)
         
         central_widget = QtWidgets.QWidget()
         central_widget.setLayout(layout)
@@ -518,8 +547,8 @@ class MainWindow(QtWidgets.QMainWindow):
         
     def _on_combobox_change(self, text):
         # self._file_index = self._file_list.index(text)
-        # self.load_file(self._file_list.index(text))
-        self.load_file(self._filename_combobox.currentIndex())
+        # self._load_file(self._file_list.index(text))
+        self._load_file(self._filename_combobox.currentIndex())
 
     def _setup_menu(self):
         # menubar = QtWidgets.QMenuBar()
@@ -535,11 +564,11 @@ class MainWindow(QtWidgets.QMainWindow):
         file_menu.addAction(quit_action)
 
     def _on_quit(self):
-        print("Quit gracefully")
+        # print("Quit gracefully")
         self._file_cacher.exit()
-        print("exit app")
+        # print("exit app")
         QtWidgets.qApp.quit()
-        print("finished exit app")
+        # print("finished exit app")
         
     def _on_open_dir(self):
         self._file_cacher.pause()
@@ -554,7 +583,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._filename_combobox.addItem(os.path.split(f)[1])
         self._filename_combobox.setCurrentIndex(self._file_cacher.current_index)
 
-    def load_file(self, file_index):
+    def _load_file(self, file_index):
         self._filename_combobox.setCurrentIndex(file_index)
         # data = sphelper.import_spimage(os.path.join(self._data_dir, self._file_list[self._file_index]), ["image"])
         data = self._file_cacher.get_data(file_index)
@@ -562,11 +591,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_model_next(self):
         if self._file_cacher.current_index + 1 < len(self._file_cacher.file_list):
-            self.load_file(self._file_cacher.current_index + 1)
+            self._load_file(self._file_cacher.current_index + 1)
 
     def _on_model_prev(self):
         if self._file_cacher.current_index - 1 >= 0:
-            self.load_file(self._file_cacher.current_index - 1)
+            self._load_file(self._file_cacher.current_index - 1)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -588,5 +617,8 @@ if __name__ == "__main__":
 
 # TODO:
 # * Reset file list when changing dictionary
-# Check age of file when caching
+# ~ Check age of file when caching
 # * Pause caching when opening file dialog (this might be what is slowing it down.
+# * Error message at startup
+# * Exit on command
+# 
